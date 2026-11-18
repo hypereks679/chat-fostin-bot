@@ -2,6 +2,8 @@ import os
 import asyncio
 import logging
 import sqlite3
+import secrets
+from aiohttp import web
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -10,7 +12,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.types import (
     Message, CallbackQuery, ChatMemberUpdated,
     ReplyKeyboardMarkup, KeyboardButton,
-    InlineKeyboardMarkup, InlineKeyboardButton,
+    InlineKeyboardMarkup, InlineKeyboardButton, Update,
 )
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
@@ -308,7 +310,42 @@ def state_name(value):
 
 
 async def main():
-    await dp.start_polling(bot)
+    # Render Web Service: receive Telegram updates through a webhook.
+    port = int(os.getenv("PORT", "10000"))
+    external_url = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
+    if not external_url:
+        raise RuntimeError("Render did not provide RENDER_EXTERNAL_URL.")
+    secret = os.getenv("WEBHOOK_SECRET") or secrets.token_urlsafe(24)
+
+    app = web.Application()
+
+    async def health(_request):
+        return web.Response(text="FOSTIN bot is running")
+
+    async def telegram_webhook(request):
+        if request.match_info.get("secret") != secret:
+            raise web.HTTPForbidden()
+        data = await request.json()
+        update = Update.model_validate(data, context={"bot": bot})
+        await dp.feed_update(bot, update)
+        return web.Response(text="OK")
+
+    app.router.add_get("/", health)
+    app.router.add_post(f"/webhook/{secret}", telegram_webhook)
+
+    await bot.set_webhook(f"{external_url}/webhook/{secret}")
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logging.info("Webhook server started on port %s", port)
+
+    try:
+        await asyncio.Event().wait()
+    finally:
+        await bot.delete_webhook()
+        await runner.cleanup()
+        await bot.session.close()
 
 
 if __name__ == "__main__":

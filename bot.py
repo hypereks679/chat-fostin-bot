@@ -331,7 +331,7 @@ async def main():
         return web.Response(text="OK")
 
     app.router.add_get("/", health)
-    app.router.add_post(f"/webhook/{secret}", telegram_webhook)
+    app.router.add_post("/webhook/{secret}", telegram_webhook)
 
     await bot.set_webhook(f"{external_url}/webhook/{secret}")
     runner = web.AppRunner(app)
